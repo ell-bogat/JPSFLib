@@ -11,19 +11,17 @@
 ################################################################################
 
 # TODO: 
-# - how to track references for each parameter from MOCA/SIMBAD?
-# - be smarter about when to use MOCA vs SIMBAD?
+# - set up pip installability
 # - make a readme describing each column & its units
+# - add toggle to ingest uncal or calints files
 # - write tests!
 #       - nonexistent input directory
 #       - empty input directory 
 #       - no calints files in input directory
 #       - header kw missing
-#       - 
-#       - 
-#       - 
-
-
+#       - duplicate science target with different program names
+#       - calints vs uncal toggle (warning if no calints present but uncals are
+#               'did you mean to set uncal = True?')
 
 # imports
 import os
@@ -41,7 +39,7 @@ def isnone(series):
     except:
         return (series == '') | (series == None) 
 
-def build_refdb(idir,odir=None):
+def build_refdb(idir,odir=None,uncal=False):
     """
     Constructs a database of target-specific reference info for each
     calints file in the input directory.
@@ -51,6 +49,8 @@ def build_refdb(idir,odir=None):
          to the database
         odir (path, optional): Location to save the database. If odir is None,
          the database will not be saved. Defaults to None.
+        uncal (bool, optional): Toggle using uncal files as inputs instead of
+         calints. Defaults to None.
 
     Raises:
         Exception: _description_
@@ -63,8 +63,9 @@ def build_refdb(idir,odir=None):
     """
     
     # Read in uncal files 
-    print('Reading calints files...')
-    fpaths = sorted(glob.glob(os.path.join(idir,f"*_calints.fits")))
+    print('Reading input files...')
+    suffix = 'uncal' if uncal else 'calints'
+    fpaths = sorted(glob.glob(os.path.join(idir,f"*_{suffix}.fits")))
 
     # Start a dataframe with the header info we want from each file
     csv_list = []
@@ -147,9 +148,6 @@ def build_refdb(idir,odir=None):
     for col,simbad_col in simbad_cols.items():
         df_simbad[col] = list(df_simbad[simbad_col])
 
-    ### TEMP ###
-    display(df_simbad.loc[:,simbad_cols.values()])
-    
     # Add the values we want to df_unique
     df_unique = pd.concat([df_unique,df_simbad.loc[:,simbad_cols.keys()]],axis=1)
 
@@ -173,9 +171,6 @@ def build_refdb(idir,odir=None):
         # print(col, list(mdf[moca_col]))
         mdf[col] = list(mdf[moca_col])
 
-    ### TEMP ###
-    display(mdf.loc[:,moca_cols.values()])
-    
     # Fill in values missing from SIMBAD with MOCA
 
     df_unique['COMMENTS'] = ''
@@ -191,8 +186,6 @@ def build_refdb(idir,odir=None):
     for col in ['SPTYPE','PLX','PLX_ERR']:
         df_unique.loc[df_unique[col].index[isnone(df_simbad[col]) & ~isnone(mdf[col])].to_list(),'COMMENTS'] += f"{col} adopted from MOCA. "
 
-    # TODO:
-    # Add ages from MOCA
     for col in ['AGE','AGE_ERR']:
         df_unique[col] = mdf[col]
         df_unique.loc[df_unique[col].index[~isnone(mdf[col])].to_list(),'COMMENTS'] += f"{col} adopted from MOCA. "
