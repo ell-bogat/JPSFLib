@@ -20,8 +20,9 @@
 #       - no calints files in input directory
 #       - header kw missing
 #       - duplicate science target with different program names
-#       - calints vs uncal toggle (warning if no calints present but uncals are
-#               'did you mean to set uncal = True?')
+#       - calints vs uncal toggle 
+#           - (warning if no calints present but uncals are
+#             'did you mean to set uncal = True?')
 
 # imports
 import os
@@ -221,3 +222,77 @@ def build_refdb(idir,odir=None,uncal=False):
     print(f'Done.')
 
     return df_out
+
+def get_sciref_files(sci_target, refdb, spt_choice=None, filters=None, exclude_disks=False):
+    """_summary_
+
+    Args:
+        sci_target (_type_): 
+            _description_
+        refdb (_type_): 
+            _description_
+        spt_choice (str, optional): 
+            None (default): use all spectral types.
+            'near' : use only references with the same spectral class letter.
+            'nearer' : use only refs within +- 1 spectral type. ie. M3-5 for an M4 science target.
+            'nearest' : use only refs with the exact same spectral type.
+        filters (str/list, optional): 
+            None (default) : include all filters.
+            'F444W' or other filter name: include only that filter.
+            ['filt1','filt2']: include only filt1 and filt2
+        exclude_disks (bool, optional): Exclude references that are known to have disks. Defaults to False.
+
+    Raises:
+        Exception: _description_
+
+    Returns:
+        list: filenames of science observations.
+        list: filenames of reference observations.
+    """
+
+    # TODO:
+        # - enable reading in refdb fpath or pandas df 
+        # - tests:
+            # - sci_target in index
+            # - sci_target in 2MASS_ID
+            # - sci_target in TARGPROP
+            # - sci_target not in refdb 
+            # - exceptions if 0 science fnames are returned
+            # - warnings if 0 reference observations are returned
+
+    # Locate input target 2MASS ID 
+    # (input name could be in index, TARGPROP, or 2MASS_ID column)
+    if sci_target in refdb['2MASS_ID'].to_list():
+        targ_2mass = sci_target
+
+    elif sci_target in refdb.index.to_list():
+        targ_2mass = refdb.loc[sci_target,'2MASS_ID'].to_list()[0]
+        
+    elif sci_target in refdb['TARGPROP'].to_list():
+        refdb_temp = refdb.reset_index()
+        refdb_temp.set_index('TARGPROP',inplace=True)
+        targ_2mass = refdb_temp.loc[sci_target,'2MASS_ID'].to_list()[0]
+    
+    else:
+        raise Exception(f'Science target {sci_target} not found in reference database.')
+        
+    refdb_temp = refdb.reset_index().set_index('2MASS_ID')
+
+    # Collect all the science files
+    sci_fnames = refdb_temp.loc[targ_2mass,'FILENAME'].to_list()
+
+    # Collect the reference files
+    if spt_choice != None:
+        raise Exception('Only spt_choice=None is currently supported.')
+    if filters != None:
+        raise Exception('Only filters=None is currently supported.')
+    if exclude_disks != False:
+        raise Exception('Only exclude_disks= False is currently supported.')
+
+    ref_fnames = refdb_temp.loc[refdb_temp.index[~(refdb_temp.index == targ_2mass)].to_list(),'FILENAME'].to_list()
+
+    for sci_fname in sci_fnames:
+        if sci_fname in ref_fnames:
+            raise Exception("One or more filenames exists in both the science and reference file list. Something is wrong.")
+
+    return [sci_fnames, ref_fnames]
