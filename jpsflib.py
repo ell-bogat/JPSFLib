@@ -13,8 +13,7 @@
 # TODO: 
 # - set up pip installability
 # - make a readme describing each column & its units
-# - add toggle to ingest uncal or calints files
-# - write tests!
+# - write tests for build_refdb()
 #       - nonexistent input directory
 #       - empty input directory 
 #       - no calints files in input directory
@@ -223,7 +222,7 @@ def build_refdb(idir,odir=None,uncal=False):
 
     return df_out
 
-def get_sciref_files(sci_target, refdb, spt_choice=None, filters=None, exclude_disks=False):
+def get_sciref_files(sci_target, refdb, idir=None, spt_choice=None, filters=None, exclude_disks=False):
     """_summary_
 
     Args:
@@ -231,6 +230,8 @@ def get_sciref_files(sci_target, refdb, spt_choice=None, filters=None, exclude_d
             _description_
         refdb (_type_): 
             _description_
+        idir (str):
+            path to directory of input data, to be appended to file names.
         spt_choice (str, optional): 
             None (default): use all spectral types.
             'near' : use only references with the same spectral class letter.
@@ -252,6 +253,8 @@ def get_sciref_files(sci_target, refdb, spt_choice=None, filters=None, exclude_d
 
     # TODO:
         # - enable reading in refdb fpath or pandas df 
+        # - filter out flags?
+        # - sptype filters 
         # - tests:
             # - sci_target in index
             # - sci_target in 2MASS_ID
@@ -275,24 +278,46 @@ def get_sciref_files(sci_target, refdb, spt_choice=None, filters=None, exclude_d
     
     else:
         raise Exception(f'Science target {sci_target} not found in reference database.')
-        
-    refdb_temp = refdb.reset_index().set_index('2MASS_ID')
+    
+    refdb_temp = refdb.reset_index()
+    refdb_temp.set_index('FILENAME',inplace=True)
 
     # Collect all the science files
-    sci_fnames = refdb_temp.loc[targ_2mass,'FILENAME'].to_list()
+    sci_fnames = refdb_temp.index[refdb_temp['2MASS_ID'] == targ_2mass].to_list()
+
+    # Start list of reference files
+    ref_fnames = refdb_temp.index[refdb_temp['2MASS_ID'] != targ_2mass].to_list()
 
     # Collect the reference files
     if spt_choice != None:
         raise Exception('Only spt_choice=None is currently supported.')
+
+    # Remove observations with disks flagged
+    if exclude_disks:
+        disk_fnames = refdb_temp.index[refdb_temp['HAS_DISK'] == True].to_list()
+        ref_fnames = list(set(ref_fnames) - set(disk_fnames))
+    
     if filters != None:
-        raise Exception('Only filters=None is currently supported.')
-    if exclude_disks != False:
-        raise Exception('Only exclude_disks= False is currently supported.')
+        if isinstance('filter',str):
+            filters = [filters]
+        filter_fnames = []
+        for filter in filters:
+            filter_fnames.extend(refdb_temp.index[refdb_temp['FILTER'] == filter].to_list())
+        if len(filter_fnames) == 0:
+            raise Warning(f'No observations found for filters {filters}.')
+        
+        sci_fnames = list(set(sci_fnames).intersection(filter_fnames))
+        ref_fnames = list(set(ref_fnames).intersection(filter_fnames))
 
-    ref_fnames = refdb_temp.loc[refdb_temp.index[~(refdb_temp.index == targ_2mass)].to_list(),'FILENAME'].to_list()
+    # Make sure no observations are in both sci_fnames and ref_fnames
+    if len(set(sci_fnames).intersection(ref_fnames)) > 0:
+        raise Exception("One or more filenames exists in both the science and reference file list. Something is wrong.")
 
-    for sci_fname in sci_fnames:
-        if sci_fname in ref_fnames:
-            raise Exception("One or more filenames exists in both the science and reference file list. Something is wrong.")
-
-    return [sci_fnames, ref_fnames]
+    if not idir is None:
+        sci_fpaths = [os.path.join(idir,sci_fname) for sci_fname in sci_fnames]
+        ref_fpaths = [os.path.join(idir,ref_fname) for ref_fname in ref_fnames]
+    else:
+        sci_fpaths = sci_fnames
+        ref_fpaths = ref_fnames
+        
+    return [sci_fpaths, ref_fpaths]
