@@ -17,13 +17,17 @@
 
 # imports
 import os
+import warnings
 import glob
+import re
 import mocapy
 import pandas as pd
 from astropy.io import fits
 
 from astroquery.simbad import Simbad
 import numpy as np
+
+sp_class_letters = ['O','B','A','F','G','K','M','T','Y']
 
 def isnone(series):
     try:
@@ -45,12 +49,64 @@ def load_refdb_csv(fpath):
          info for each file.
     """
 
+    # TODO:
+    # - Write tests:
+        # -  
+
     refdb = pd.read_csv(fpath)
     refdb.set_index('TARGNAME',inplace=True)
 
     return refdb
 
-def build_refdb(idir,odir=None,uncal=False):
+def decode_simbad_sptype(input_sptypes):
+
+    if isinstance(input_sptypes,str):
+        input_sptypes = [input_sptypes]
+
+    
+    sp_classes = []
+    sp_subclasses = []
+    sp_lclasses = []
+
+    for simbad_spectype in input_sptypes:
+        
+        m = re.search(r'([OBAFGKMTY])(\d\.*\d*)[-+/]*(\d\.*\d*)*[-+/]*(I*V*I*)[-/]*(I*V*I*)',simbad_spectype)
+        
+        if m is None:
+            sp_classes.append('')
+            sp_subclasses.append('')
+            sp_lclasses.append('')
+        else:
+            res = m.group(1,2,3,4,5)
+            
+            sp_classes.append(res[0])
+            sp_subclasses.append(res[1])
+            if 'V' in res[3:] or res[3:] == ('',''):
+                sp_lclasses.append('V')
+
+            elif res[4] != '':
+                sp_lclasses.append(res[4])
+
+            else:
+                sp_lclasses.append(res[3])
+
+    return (sp_classes,sp_subclasses,sp_lclasses)
+
+
+def update_db_sptypes(refdb):
+    simbad_sptypes = refdb.SPTYPE.values
+
+    sp_classes, sp_subclasses, sp_lclasses = decode_simbad_sptype(simbad_sptypes)
+
+    refdb_copy = refdb.copy()
+    refdb_copy['SP_CLASS'] = sp_classes
+    refdb_copy['SP_SUBCLASS'] = sp_subclasses
+    refdb_copy['SP_LCLASS'] = sp_lclasses
+
+    return refdb_copy
+
+
+def build_refdb(idir,odir='.',uncal=False,overwrite=False):
     """
     Constructs a database of target-specific reference info for each
     calints file in the input directory.
@@ -58,10 +114,10 @@ def build_refdb(idir,odir=None,uncal=False):
     Args:
         idir (path): Path to pre-processed (stage 2) JWST images to be added 
          to the database
-        odir (path, optional): Location to save the database. If odir is None,
-         the database will not be saved. Defaults to None.
+        odir (path, optional): Location to save the database. Defaults to '.'.
         uncal (bool, optional): Toggle using uncal files as inputs instead of
          calints. Defaults to None.
+        overwrite (bool, optional): If true, overwrite the existing caldb.
 
     Raises:
         Exception: _description_
@@ -84,6 +140,17 @@ def build_refdb(idir,odir=None,uncal=False):
     #           - (warning if no calints present but uncals are
     #             'did you mean to set uncal = True?')
     
+    # Check that you won't accidentally overwrite an existing csv.
+    outpath = os.path.join(odir,'ref_lib.csv')
+    if os.path.exists(outpath):
+
+        if overwrite:
+            msg = f'\nThis operation will overwrite {outpath}. \nIf this is not what you want, abort now!'
+            warnings.warn(msg)
+
+        else:
+            raise Exception(f'This operation is trying to overwrite {outpath}.\nIf this is what you want, set overwrite=True.')
+
     # Read in uncal files 
     print('Reading input files...')
     suffix = 'uncal' if uncal else 'calints'
@@ -160,7 +227,7 @@ def build_refdb(idir,odir=None,uncal=False):
     df_simbad.set_index('2MASS_ID',inplace=True)
 
     # Rename some columns
-    simbad_cols = {
+    simbad_cols = { # Full column list here: http://simbad.u-strasbg.fr/Pages/guide/sim-fscript.htx 
         'SPTYPE': 'SP_TYPE', # maybe use 'simple_spt' or 'complete_spt'?
         'KMAG': 'FLUX_K', # 'kmag'
         'KMAG_ERR': 'FLUX_ERROR_K', # 'ekmag'
@@ -202,9 +269,7 @@ def build_refdb(idir,odir=None,uncal=False):
     df_simbad.sort_index(inplace=True)   
     mdf.sort_index(inplace=True)   
 
-    # for col in ['SPTYPE','KMAG','KMAG_ERR']:
-    #     df_unique[isnone(df_simbad[col]) & ~isnone(mdf[col]),col] += f"{col} adopted from MOCA. "
-
+    # Update comments
     for col in ['SPTYPE','PLX','PLX_ERR']:
         df_unique.loc[df_unique[col].index[isnone(df_simbad[col]) & ~isnone(mdf[col])].to_list(),'COMMENTS'] += f"{col} adopted from MOCA. "
 
@@ -212,13 +277,16 @@ def build_refdb(idir,odir=None,uncal=False):
         df_unique[col] = mdf[col]
         df_unique.loc[df_unique[col].index[~isnone(mdf[col])].to_list(),'COMMENTS'] += f"{col} adopted from MOCA. "
 
-
+    # Replace values
     df_unique_replaced = df_unique.loc[:,simbad_cols.keys()].combine_first(df_simbad.loc[:,simbad_cols.keys()])
     df_unique.loc[:,simbad_cols.keys()] = df_unique_replaced.loc[:,simbad_cols.keys()]
 
     # Calculate distances from plx in mas
     df_unique['DIST'] = 1. / (df_unique['PLX'] / 1000)
     df_unique['DIST_ERR'] = df_unique['PLX_ERR'] / 1000 / ((df_unique['PLX'] / 1000)**2)
+
+    # Decode spectral types
+    df_unique = update_db_sptypes(df_unique)
 
     # Add empty columns
     empty_cols = [
@@ -234,18 +302,18 @@ def build_refdb(idir,odir=None,uncal=False):
     df_unique.set_index('TARGNAME',inplace=True)
     df_unique = df_unique.reindex(df.index)
     df_out = pd.concat([df,df_unique],axis=1)
-
-    if not odir is None:
-        outpath = os.path.join(odir,'ref_lib.csv')
-        df_out.to_csv(outpath)
-
-        print(f'Database saved to {outpath}')
+    
+    # Save dataframe
+    
+    df_out.to_csv(outpath)
+    print(f'Database saved to {outpath}')
     print(f'Done.')
 
     return df_out
 
+
 def get_sciref_files(sci_target, refdb, idir=None, spt_choice=None, filters=None, exclude_disks=False):
-    """_summary_
+    """Construct a list of science files and reference files to input to a PSF subtraction routine.
 
     Args:
         sci_target (str): 
@@ -266,9 +334,6 @@ def get_sciref_files(sci_target, refdb, idir=None, spt_choice=None, filters=None
             'F444W' or other filter name: include only that filter.
             ['filt1','filt2']: include only filt1 and filt2
         exclude_disks (bool, optional): Exclude references that are known to have disks. Defaults to False.
-
-    Raises:
-        Exception: _description_
 
     Returns:
         list: filenames of science observations.
