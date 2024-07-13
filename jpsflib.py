@@ -35,6 +35,11 @@ def isnone(series):
     except:
         return (series == '') | (series == None) 
 
+def not_isnone(series):
+    
+    return ~ isnone(series)
+
+
 def load_refdb_csv(fpath):
     """
     Reads the database of target- and observation-specific reference info for 
@@ -269,17 +274,23 @@ def build_refdb(idir,odir='.',uncal=False,overwrite=False):
     df_simbad.sort_index(inplace=True)   
     mdf.sort_index(inplace=True)   
 
-    # Update comments
-    for col in ['SPTYPE','PLX','PLX_ERR']:
-        df_unique.loc[df_unique[col].index[isnone(df_simbad[col]) & ~isnone(mdf[col])].to_list(),'COMMENTS'] += f"{col} adopted from MOCA. "
+    # Replace values and update comments
+    cols_overlap = list(set(list(simbad_cols.keys())).intersection(list(moca_cols.keys())))
+    for col in cols_overlap:
+        df_unique.loc[isnone(df_simbad[col]) & ~isnone(mdf[col]),'COMMENTS'] += f"{col} adopted from MOCA. "
+        df_unique.loc[isnone(df_simbad[col]) & ~isnone(mdf[col]),col] = mdf
 
     for col in ['AGE','AGE_ERR']:
         df_unique[col] = mdf[col]
-        df_unique.loc[df_unique[col].index[~isnone(mdf[col])].to_list(),'COMMENTS'] += f"{col} adopted from MOCA. "
+        df_unique.loc[~isnone(mdf[col]),'COMMENTS'] += f"{col} adopted from MOCA. "
 
     # Replace values
-    df_unique_replaced = df_unique.loc[:,simbad_cols.keys()].combine_first(df_simbad.loc[:,simbad_cols.keys()])
-    df_unique.loc[:,simbad_cols.keys()] = df_unique_replaced.loc[:,simbad_cols.keys()]
+    #df_unique.loc[df_unique['SPTYPE']=='','SPTYPE'] = None
+    #df_unique_replaced = df_unique.loc[:,cols_overlap].combine_first(mdf.loc[:,cols_overlap])
+    #df_unique.loc[:,cols_overlap] = df_unique_replaced.loc[:,cols_overlap]
+    #cols_overlap = ['SPTYPE','PLX','PLX_ERR']
+    #df_unique.loc[isnone(df_unique.loc[:,cols_overlap]),cols_overlap] = mdf.loc[isnone(df_unique.loc[:,cols_overlap]),cols_overlap]
+    #df_unique.loc[:,cols_overlap].where(not_isnone,other=mdf,inplace=True)
 
     # Calculate distances from plx in mas
     df_unique['DIST'] = 1. / (df_unique['PLX'] / 1000)
@@ -413,3 +424,9 @@ def get_sciref_files(sci_target, refdb, idir=None, spt_choice=None, filters=None
         ref_fpaths = ref_fnames
         
     return [sci_fpaths, ref_fpaths]
+
+# # TESTING
+# idir = 'DATA/NANREPLACED_v0'
+# ref_db = build_refdb(idir,overwrite=True)
+
+# print('Done Done.')
